@@ -6,64 +6,126 @@ area: nightlight
 upstream:
 patch:
 found: 2026-09-14
-versions: omarchy 4.0.2-1, hyprsunset 0.4.0-3, hyprland 0.56.2-1
+versions: omarchy 4.0.2-1, hyprsunset 0.4.0-3, hyprland 0.56.2-1, aquamarine 0.14.0-2
 ---
 
 ## What happens
 
 Wake the machine, the bar's night light icon is lit, the screen is not warm. Toggling
-off then on restores the tint.
+the widget off then on restores the tint.
 
 ## Why
 
-Nothing in the chain looks at the gamma actually on the output. The indicator reads
-hyprsunset's own in-memory integer:
+Two separate things, and only the first is in doubt.
+
+### The tint is lost
+
+hyprsunset applies a colour transform matrix through `hyprland-ctm-control-v1`, per
+output — not a gamma LUT. Something on the resume path drops that CTM without
+hyprsunset knowing.
+
+The usual suspects are already fixed on these versions, so this needs pinning down
+before anything is written:
+
+- hyprsunset **does** handle hotplug. `src/Hyprsunset.cpp:130-141`: a new `wl_output`
+  global is bound and, if already initialised, gets the CTM applied instantly and
+  committed; `:146` drops it on global-remove. So an output that is destroyed and
+  recreated should come back tinted.
+- aquamarine **does** re-send the CTM on modeset. PR #256 "drm: re-send ctm blob on
+  modeset" merged 2026-03-13, shipped in v0.14.0 (2026-07-27); installed is 0.14.0-2.
+  Plus #297 clear stale color state, #303 init ctm to identity, #320 avoid redundant
+  identity modesets.
+- hyprsunset#65 "Filter is disabled after toggling monitor DPMS" was closed 2026-08-07
+  as fixed by exactly that aquamarine work.
+
+So the DPMS path is *believed* fixed here and suspend/resume is the untested one. On
+resume the journal shows amdgpu fully reinitialising both cards (`PCIE GART enabled`,
+`DMUB hardware initialized`), which is a heavier path than a DPMS toggle: plausibly the
+output survives as the same wl_output global (so hyprsunset's hotplug branch never
+fires) while the kernel-side CTM is gone and aquamarine's `NEEDS_RECONFIG` re-send
+doesn't cover it. Unverified.
+
+Also unruled-out: hyprsunset's poll thread misbehaving across suspend, cf. hyprsunset#47
+(CPU spike after sleep) and #55 (scheduling delayed after suspend).
+
+### The indicator lies about it
+
+Independent of the above, and certainly a bug. Nothing in the chain looks at what is on
+the output:
 
     NightLight.qml  →  nightlight Service.qml  →  hyprctl hyprsunset temperature  →  hyprsunset
 
-`Service.qml` defines on as `temperature < 6000` (`NightlightModel.js`), from shelling
-out to `hyprctl hyprsunset temperature`. Night is 4000K, day 6500K. Setting it just
-runs `hyprctl hyprsunset temperature <n>`.
+`Service.qml` defines on as `temperature < 6000` (`NightlightModel.js`), read by
+shelling out to `hyprctl hyprsunset temperature`. That returns hyprsunset's own
+in-memory `KELVIN`, which is still 4000 whether or not the CTM survived. Night is
+4000K, day 6500K.
 
-hyprsunset is long-lived (started by `omarchy-toggle-nightlight` via `uwsm-app`, scope
-`app-Hyprland-hyprsunset-*`, not autostarted). On suspend/resume — or DPMS off, which
-`idle.screensaver` triggers — the output is reinitialised and the gamma LUT resets to
-linear. hyprsunset is never notified and does not re-push. Its counter still says 4000,
-so `hyprctl` says 4000, so the icon stays lit.
+The widget also has no re-apply: `NightLight.qml`'s only action is
+`setNightlight(!root.active)`. That is why the fix is two taps rather than one —
+`reload()` re-applies unconditionally, so a single `hyprctl hyprsunset temperature 4000`
+would do it, but the UI cannot send that.
 
-One tap isn't enough because re-sending the same value looks like a no-op; off→on sends
-6500 then 4000, two genuinely new values, so a fresh LUT gets pushed.
-
-Same fragility is already acknowledged upstream in `omarchy-toggle-nightlight`:
-
-    # A freshly-started hyprsunset applies its default temperature at the end of
-    # its boot, overriding anything set before then — so resend until it sticks
-    for _ in {1..10}; do ...
-
-Cold boot behaves differently: hyprsunset isn't running, `hyprctl` fails, the service
-sets `temperature = null`, and the icon correctly reads off. The bug is specific to
-resume/DPMS.
+Cold boot behaves correctly: hyprsunset isn't running (it is started by
+`omarchy-toggle-nightlight` via `uwsm-app`, not autostarted), `hyprctl` fails, the
+service sets `temperature = null`, icon reads off.
 
 ## Repro
 
-    hyprctl dispatch dpms off && sleep 2 && hyprctl dispatch dpms on
+Not yet pinned down. See plan step 1.
 
-Tint gone, `omarchy toggle nightlight --status` still reports `{"enabled":true,"temperature":4000}`.
+## Plan
 
-## Fix
+### 1. Find out what actually breaks — nothing gets written before this
 
-Nothing upstream reapplies it — no nightlight touch anywhere in `omarchy/bin/` beyond
-the toggle, and the only sleep-related unit is `omarchy-sleep-lock.service`, which just
-locks.
+- **Is DPMS still broken?** `hyprctl dispatch dpms off && sleep 2 && hyprctl dispatch dpms on`.
+  Expectation on aquamarine 0.14: tint survives. If it doesn't, hyprsunset#65 has
+  regressed and that is the whole story — reopen it upstream, done.
+- **Is suspend broken?** Confirm across a real suspend, not by memory.
+- **Does one re-send fix it?** With the tint gone, `hyprctl hyprsunset temperature 4000`
+  alone. Source says yes. If it does *not*, hyprsunset's wayland connection is the
+  problem, not the CTM, and the whole plan changes.
+- **What does hyprsunset see?** Restart it with `--verbose` and read the scope journal
+  across a suspend — it logs every CTM calculation, output bind and global-remove.
+  `systemctl --user status 'app-Hyprland-hyprsunset-*.scope'` for the unit name.
+- **Does the output global survive?** `wayland-info` or a socket2 tail
+  (`socat -U - UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`)
+  across the suspend — `monitorremoved`/`monitoradded` tells us whether hyprsunset's
+  hotplug branch had any chance to fire.
 
-Candidates, in rough order of how much they fix:
+Record the answers here before moving on.
 
-1. **hyprsunset** re-applies on output re-enable. Real fix, upstream-hyprland side.
-2. **Omarchy** ships a resume hook: a `systemd --user` unit `WantedBy=suspend.target`
-   that reads the current temperature, bounces it through a different value, re-sends.
-   Doesn't cover DPMS.
-3. **Omarchy shell** stops trusting `hyprctl` as the source of truth and re-applies on
-   the compositor's monitor-added / DPMS events (socket2). Covers both, and fixes the
-   lying indicator rather than just the tint.
+### 2. Local workaround — unblocks the machine, independent of where the bug is
 
-Local workaround: not written yet.
+A `systemd --user` unit `WantedBy=suspend.target`, `After=suspend.target`, running a
+script that reads the current temperature and re-sends it. Cheap, no upstream
+dependency, correct even if the real cause turns out to be elsewhere. Lands in
+`patches/`, tracked via the dotfiles `manifest`.
+
+Covers suspend only. If step 1 shows DPMS is also affected, the same script gets driven
+from a socket2 watcher instead, on `monitoradded`/`monitoraddedv2`.
+
+### 3. The real fix, wherever step 1 points
+
+- **aquamarine / Hyprland** — CTM not restored on the resume modeset path. Most likely,
+  given #256 fixed the DPMS case in the same place. Fix goes next to that code.
+- **hyprsunset** — if the output global survives resume, hyprsunset can't notice via the
+  registry and needs another trigger. Note #7 is an open request for gammastep-style
+  hooks, which would be one.
+- **hyprsunset** — if a single re-send does not restore the tint, the wayland connection
+  or poll thread is broken across suspend. Different bug, higher value.
+
+### 4. Fix the lying indicator — worth doing regardless
+
+Omarchy-side, and true even after step 3 lands upstream, because trusting hyprsunset's
+integer is wrong on principle.
+
+- Give `Service.qml` a `reapply()` that re-sends the current temperature, and expose it
+  on the existing `IpcHandler` alongside `enable`/`disable`/`toggle`.
+- Have the service re-apply on the compositor's own monitor events rather than only on
+  user action. The shell already talks to socket2 — `Quickshell.Hyprland` is imported in
+  `Bar.qml`, `Workspaces.qml`, `KeyboardLayout.qml`, `PopupCard.qml` and the idle
+  service — so there is precedent and no new dependency.
+- Then a middle-click or long-press on the indicator that re-applies without flipping,
+  so the manual escape hatch is one action instead of two.
+
+Upstreamable to Omarchy on its own, without waiting on the Hyprland side.
