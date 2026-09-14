@@ -4,7 +4,7 @@ title: Night light indicator reads "on" after resume while the screen is neutral
 status: noted
 area: nightlight
 upstream:
-patch:
+patch: patches/nightlight-resume/omarchy-nightlight-resume
 found: 2026-09-14
 versions: omarchy 4.0.2-1, hyprsunset 0.4.0-3, hyprland 0.56.2-1, aquamarine 0.14.0-2
 ---
@@ -71,7 +71,13 @@ service sets `temperature = null`, icon reads off.
 
 ## Repro
 
-Not yet pinned down. See plan step 1.
+Suspend, resume, look at the screen. Confirmed on omarchy 4.0.2-1 / hyprsunset 0.4.0-3 /
+hyprland 0.56.2-1 / aquamarine 0.14.0-2 — i.e. *with* the aquamarine CTM-on-modeset fix
+already installed, so this is not the DPMS bug from hyprsunset#65 and no update helps.
+
+Still unanswered, because it needs a suspend to test: whether a single
+`hyprctl hyprsunset temperature 4000` restores the tint, or only a change of value does.
+The workaround sidesteps the question by sending a neighbouring Kelvin first.
 
 ## Plan
 
@@ -94,15 +100,21 @@ Not yet pinned down. See plan step 1.
 
 Record the answers here before moving on.
 
-### 2. Local workaround — unblocks the machine, independent of where the bug is
+### 2. Local workaround — DONE, installed 2026-09-14
 
-A `systemd --user` unit `WantedBy=suspend.target`, `After=suspend.target`, running a
-script that reads the current temperature and re-sends it. Cheap, no upstream
-dependency, correct even if the real cause turns out to be elsewhere. Lands in
-`patches/`, tracked via the dotfiles `manifest`.
+`patches/nightlight-resume/`. Watches logind's `PrepareForSleep` and, on the resume edge,
+re-sends the current temperature; the bar indicator is refreshed after.
 
-Covers suspend only. If step 1 shows DPMS is also affected, the same script gets driven
-from a socket2 watcher instead, on `monitoradded`/`monitoraddedv2`.
+`suspend.target` does not exist in the user manager (`LoadState=not-found`), so there is
+no unit to hook — hence the same `dbus-monitor` mechanism `omarchy-system-sleep-monitor`
+already uses to lock before suspend, just acting on `boolean false` instead of `true`.
+
+Installed as `~/.local/bin/omarchy-nightlight-resume` +
+`~/.config/systemd/user/omarchy-nightlight-resume.service`, enabled. Not yet in the
+dotfiles `manifest`.
+
+Covers suspend only. If DPMS turns out to be affected too, drive the same `--once` path
+from a socket2 watcher on `monitoradded`/`monitoraddedv2`.
 
 ### 3. The real fix, wherever step 1 points
 

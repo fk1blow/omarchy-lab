@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Re-apply the hyprsunset temperature after resume from suspend.
+#
+# On resume the CTM hyprsunset set through hyprland-ctm-control-v1 is gone, but
+# hyprsunset still holds its KELVIN, so `hyprctl hyprsunset temperature` — the only
+# thing the bar indicator consults — keeps reporting the night value while the screen
+# is neutral. See findings/0002.
+#
+# Watches logind's PrepareForSleep signal, same mechanism omarchy-system-sleep-monitor
+# uses to lock before suspend, but acting on the resume edge (boolean false).
+# suspend.target does not exist in the user manager, so there is no unit to hook.
+set -u
+
+SETTLE=${NIGHTLIGHT_RESUME_SETTLE:-2}   # let the compositor finish re-initialising outputs
+IDENTITY_TEMP=6000                      # Omarchy's own day/night threshold
+
+current_temp() {
+  hyprctl hyprsunset temperature 2>/dev/null | grep -oE '[0-9]+' | head -n1
+}
+
+reapply() {
+  local temp
+
+  pgrep -x hyprsunset >/dev/null || return 0
+  [[ $(hyprctl hyprsunset identity get 2>/dev/null) == "false" ]] || return 0
+
+  temp=$(current_temp)
+  [[ -n $temp ]] || return 0
+  (( temp < IDENTITY_TEMP )) || return 0   # day: the CTM is ~identity, nothing to restore
+
+  # hyprsunset's reload() re-applies unconditionally, so re-sending the same value is
+  # enough — but a detour through a neighbouring Kelvin is imperceptible and does not
+  # depend on that staying true. Retry like omarchy-toggle-nightlight does: a hyprctl
+  # this soon after resume can land before hyprsunset is listening again.
+  for _ in {1..10}; do
+    hyprctl hyprsunset temperature $((temp + 1)) >/dev/null 2>&1
+    hyprctl hyprsunset temperature "$temp" >/dev/null 2>&1
+    [[ $(current_temp) == "$temp" ]] && break
+    sleep 0.3
+  done
+
+  omarchy-shell -q nightlight refresh >/dev/null 2>&1 || true
+}
+
+case ${1:-} in
+  --once) reapply; exit 0 ;;
+esac
+
+dbus-monitor --system \
+  "type='signal',sender='org.freedesktop.login1',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'" |
+  while IFS= read -r line; do
+    [[ $line == *"boolean false"* ]] || continue
+    sleep "$SETTLE"
+    reapply
+  done
