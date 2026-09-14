@@ -77,7 +77,7 @@ already installed, so this is not the DPMS bug from hyprsunset#65 and no update 
 
 Still unanswered, because it needs a suspend to test: whether a single
 `hyprctl hyprsunset temperature 4000` restores the tint, or only a change of value does.
-The workaround sidesteps the question by sending a neighbouring Kelvin first.
+Toggling the widget always sends a different value, so using the widget never answers it.
 
 ## Plan
 
