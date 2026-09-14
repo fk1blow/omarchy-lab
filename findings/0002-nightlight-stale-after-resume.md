@@ -83,22 +83,94 @@ Toggling the widget always sends a different value, so using the widget never an
 
 ### 1. Find out what actually breaks — nothing gets written before this
 
-- **Is DPMS still broken?** `hyprctl dispatch dpms off && sleep 2 && hyprctl dispatch dpms on`.
-  Expectation on aquamarine 0.14: tint survives. If it doesn't, hyprsunset#65 has
-  regressed and that is the whole story — reopen it upstream, done.
-- **Is suspend broken?** Confirm across a real suspend, not by memory.
-- **Does one re-send fix it?** With the tint gone, `hyprctl hyprsunset temperature 4000`
-  alone. Source says yes. If it does *not*, hyprsunset's wayland connection is the
-  problem, not the CTM, and the whole plan changes.
-- **What does hyprsunset see?** Restart it with `--verbose` and read the scope journal
-  across a suspend — it logs every CTM calculation, output bind and global-remove.
-  `systemctl --user status 'app-Hyprland-hyprsunset-*.scope'` for the unit name.
-- **Does the output global survive?** `wayland-info` or a socket2 tail
-  (`socat -U - UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`)
-  across the suspend — `monitorremoved`/`monitoradded` tells us whether hyprsunset's
-  hotplug branch had any chance to fire.
+**Order matters.** The first re-send destroys the broken state, so every passive check
+happens before any active one. Answers go in the Results block below.
 
-Record the answers here before moving on.
+#### Before suspending
+
+Only needs to be true, not set up: **the screen is actually warm**, and
+
+    hyprctl hyprsunset temperature     # note it, expect 4000
+
+If it is already not warm, this is not a suspend bug and the rest of the sheet is wrong.
+
+#### First pass — straight after resume, in this order
+
+1. **Look at the screen.** Warm or not. That is the whole observation; everything below
+   is only there to explain it.
+
+2. **What does the stack claim?** None of these change anything.
+
+        hyprctl hyprsunset temperature      # expect 4000 — the value the indicator trusts
+        hyprctl hyprsunset identity get     # expect false
+        hyprctl hyprsunset gamma            # expect 100
+        omarchy toggle nightlight --status
+
+3. **Is it the same hyprsunset?** A restart would explain everything and mean something
+   different.
+
+        pgrep -x hyprsunset
+        systemctl --user status 'app-Hyprland-hyprsunset-*.scope' --no-pager | head -5
+
+4. **Same value.** First active step — after this the evidence is gone.
+
+        hyprctl hyprsunset temperature 4000
+
+   Warm again → a plain re-send is enough, which is what the source says
+   (`reload()` re-applies unconditionally, Hyprsunset.cpp:274). Stop here.
+
+5. **Different value.** Only if 4 did nothing.
+
+        hyprctl hyprsunset temperature 4001
+
+   Warm → it needs a *change*, not a re-send, and the source reading is wrong somewhere.
+
+6. **Restart it.** Only if 5 did nothing.
+
+        pkill -x hyprsunset; setsid uwsm-app -- hyprsunset & sleep 2
+        hyprctl hyprsunset temperature 4000
+
+   Warm → hyprsunset's wayland connection does not survive suspend. Different and bigger
+   bug than the CTM story; cf. hyprsunset#47, #55.
+
+#### Second pass — only if the first is inconclusive
+
+Arm both logs *before* suspending. They cost nothing and answer "did hyprsunset get a
+chance to notice".
+
+    mkdir -p /tmp/nl
+    socat -U - UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock \
+      > /tmp/nl/socket2.log 2>&1 &
+
+    pkill -x hyprsunset
+    setsid hyprsunset --verbose > /tmp/nl/hyprsunset.log 2>&1 < /dev/null &
+    sleep 2; hyprctl hyprsunset temperature 4000     # confirm warm before suspending
+
+After resume, before touching anything:
+
+    grep -E 'monitor(added|removed)' /tmp/nl/socket2.log
+    grep -E 'output|CTM|Calculated' /tmp/nl/hyprsunset.log | tail -30
+
+| socket2 shows | hyprsunset log shows | Reading |
+|---|---|---|
+| `monitorremoved` + `monitoradded` | "Found new output … applying CTM instantly" | hyprsunset re-applied and it still did not stick → compositor side, aquamarine |
+| `monitorremoved` + `monitoradded` | nothing | hyprsunset missed the new global → hyprsunset bug |
+| neither | nothing | the output never went away, so hyprsunset had no trigger → needs one it does not have |
+
+Note `hyprsunset --verbose` dumps the whole wayland protocol stream, so the log grows
+fast; delete it after.
+
+#### Results
+
+_(unanswered)_
+
+    date:
+    1  screen warm on resume:
+    2  hyprctl reported:
+    3  same pid as before suspend:
+    4  same value restored it:
+    5  different value restored it:
+    6  restart restored it:
 
 ### 2. Local workaround — not written, and not until step 1 is answered
 
