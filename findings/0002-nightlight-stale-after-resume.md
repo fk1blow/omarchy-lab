@@ -4,7 +4,7 @@ title: Night light indicator reads "on" after resume while the screen is neutral
 status: noted
 area: nightlight
 upstream:
-patch: patches/nightlight-resume/omarchy-nightlight-resume
+patch:
 found: 2026-09-14
 versions: omarchy 4.0.2-1, hyprsunset 0.4.0-3, hyprland 0.56.2-1, aquamarine 0.14.0-2
 ---
@@ -100,21 +100,17 @@ The workaround sidesteps the question by sending a neighbouring Kelvin first.
 
 Record the answers here before moving on.
 
-### 2. Local workaround — DONE, installed 2026-09-14
+### 2. Local workaround — not written, and not until step 1 is answered
 
-`patches/nightlight-resume/`. Watches logind's `PrepareForSleep` and, on the resume edge,
-re-sends the current temperature; the bar indicator is refreshed after.
+A resume-edge re-send is the obvious shape: `suspend.target` does not exist in the user
+manager (`LoadState=not-found`), so there is no unit to hook and it would have to watch
+logind's `PrepareForSleep` the way `omarchy-system-sleep-monitor` already does to lock
+before suspend, acting on `boolean false` instead of `true`.
 
-`suspend.target` does not exist in the user manager (`LoadState=not-found`), so there is
-no unit to hook — hence the same `dbus-monitor` mechanism `omarchy-system-sleep-monitor`
-already uses to lock before suspend, just acting on `boolean false` instead of `true`.
-
-Installed as `~/.local/bin/omarchy-nightlight-resume` +
-`~/.config/systemd/user/omarchy-nightlight-resume.service`, enabled. Not yet in the
-dotfiles `manifest`.
-
-Covers suspend only. If DPMS turns out to be affected too, drive the same `--once` path
-from a socket2 watcher on `monitoradded`/`monitoraddedv2`.
+Written and installed once on 2026-09-14, then removed the same evening. It was premature
+twice over: the mechanism is still unnamed, so there was nothing to say the re-send was
+the right lever; and it only fires on resume, so a warm screen the next morning would not
+distinguish the workaround working from the bug not happening. Step 1 first.
 
 ### 3. The real fix, wherever step 1 points
 
