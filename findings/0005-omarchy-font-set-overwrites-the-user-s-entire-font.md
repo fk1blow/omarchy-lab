@@ -1,9 +1,9 @@
 ---
 id: 0005
 title: omarchy font set overwrites the user's entire fonts.conf
-status: noted
+status: filed
 area: fonts
-upstream:
+upstream: https://github.com/omacom/omarchy/issues/12927
 patch:
 found: 2026-09-22
 versions: omarchy 4.0.2-1, fontconfig 2:2.18.3-2
@@ -70,11 +70,27 @@ require the font to actually change.
 
 ## Fix
 
+Filed as [omacom/omarchy#12927](https://github.com/omacom/omarchy/issues/12927).
+
 **Upstream:** write to `~/.config/fontconfig/conf.d/50-omarchy-monospace.conf` instead
 of owning `fonts.conf`. That is what the drop-in directory is for, it composes with
 whatever else the user has, and it needs no merge logic — the file is still written
 wholesale, it just stops being a file that belongs to someone else. A migration can
 drop the `monospace` block from `fonts.conf` if it is the only thing there.
+
+Omarchy already uses this convention at the system level -- the package ships
+`/usr/share/fontconfig/conf.avail/50-omarchy.conf`, linked into `/etc/fonts/conf.d/`,
+which is where the `monospace -> JetBrainsMono Nerd Font` assignment lives. The load
+order also works out, which matters because the user-level rule has to override that
+package one:
+
+    /etc/fonts/conf.d/50-omarchy.conf   package drop-in (assigns monospace)
+    /etc/fonts/conf.d/50-user.conf      sorts after "50-omarchy", and includes:
+        ~/.config/fontconfig/conf.d/*       <- proposed location
+        ~/.config/fontconfig/fonts.conf     <- user's own file, still loads last
+
+So a drop-in is applied after the package rule and before the user's own `fonts.conf`,
+meaning a user rule would outrank Omarchy's instead of being deleted by it.
 
 Failing that, at minimum back the file up the way `omarchy refresh` does, rather than
 truncating in place.
