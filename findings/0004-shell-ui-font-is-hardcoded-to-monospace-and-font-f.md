@@ -1,9 +1,9 @@
 ---
 id: 0004
 title: Shell UI font is hardcoded to monospace and [font] family is silently dropped
-status: noted
+status: filed
 area: shell
-upstream:
+upstream: https://github.com/omacom/omarchy/issues/11359#issuecomment-5781579461
 patch:
 found: 2026-09-22
 versions: omarchy 4.0.2-1, quickshell 0.3.1-1, fontconfig 2:2.18.3-2
@@ -90,6 +90,11 @@ Nothing changes, nothing is logged. (`omarchy restart shell` is required regardl
 already-instantiated widgets keep the old font.)
 
 ## Fix
+
+Filed as a [comment on #11359](https://github.com/omacom/omarchy/issues/11359#issuecomment-5781579461)
+rather than as its own issue: it is the same drop-on-the-floor pattern in the sibling
+branch of the same function, so whoever fixes the `[bar]` keys is two lines away from
+this one. See [0001](0001-bar-icon-tokens-unreachable.md), which owns that issue.
 
 **Upstream**, smallest useful change: let `[font] family` through `applyShellValues()`
 as a string and bind `Style.fontFamily` to it, defaulting to `monospace` so current
