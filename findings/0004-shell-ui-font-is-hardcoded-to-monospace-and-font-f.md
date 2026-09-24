@@ -95,6 +95,8 @@ Filed as a [comment on #11359](https://github.com/omacom/omarchy/issues/11359#is
 rather than as its own issue: it is the same drop-on-the-floor pattern in the sibling
 branch of the same function, so whoever fixes the `[bar]` keys is two lines away from
 this one. See [0001](0001-bar-icon-tokens-unreachable.md), which owns that issue.
+Leave that thread alone — #11359 has other contributors working in it, and the
+comment already says what it needs to.
 
 **Upstream**, smallest useful change: let `[font] family` through `applyShellValues()`
 as a string and bind `Style.fontFamily` to it, defaulting to `monospace` so current

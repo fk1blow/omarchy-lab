@@ -71,6 +71,8 @@ require the font to actually change.
 ## Fix
 
 Filed as [omacom/omarchy#12927](https://github.com/omacom/omarchy/issues/12927).
+Leave it there — no follow-up comments, no edits, no closing it out. Whether and
+when upstream responds is upstream's call.
 
 **Upstream:** write to `~/.config/fontconfig/conf.d/50-omarchy-monospace.conf` instead
 of owning `fonts.conf`. That is what the drop-in directory is for, it composes with
